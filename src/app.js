@@ -12,12 +12,12 @@ http.listen(4444, function () {
 
 const rounds = [];
 const players = [];
-var numUsers = 0;
+var numOfPlayers = 0;
 io.on("connection", socket => {
     var addedUser = false;
     socket.on('landing', () => {
-            console.log('user count: ', numUsers);
-            socket.emit('playerCount', numUsers);
+            console.log('landed on menu so user count: ', numOfPlayers);
+            socket.emit('playerCount', numOfPlayers);
     });
     // when the client emits 'add user', this listens and executes
     socket.on('add user', (username) => {
@@ -26,15 +26,26 @@ io.on("connection", socket => {
         };
         // we store the username in the socket session for this client
         socket.username = username;
-        ++numUsers;
+        ++numOfPlayers;
         addedUser = true;
-        socket.emit('login', numUsers);
+        players.push({username, isHost: numOfPlayers === 1});
+        //get host
+        if (numOfPlayers === 1) {
+            socket.emit('login', {numOfPlayers, isHost: true});
+            console.log('host is ', username);
+        } else {
+            socket.emit('login', {numOfPlayers, isHost: false});
+        }
         // echo globally (all clients) that a person has connected
         socket.broadcast.emit('user joined', {
             username: socket.username,
-            numUsers: numUsers
+            numOfPlayers: numOfPlayers
         });
         console.log('Added ' + username + ' to the game');
+    });
+
+    socket.on('get lobby players', () => {
+        socket.emit('lobby players', {players});
     });
 });
 
