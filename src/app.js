@@ -5,43 +5,49 @@ var fs = require('fs');
 
 http.listen(4444, function () {
     console.log("Let's go!");
-    let cards = initCards(players);
-    console.log(cards.players);
-    console.log(cards.deck.length);
-    cards.players = [
-        {
-            uniqueId: 1,
-            hand: []
-        },
-        {
-            uniqueId: 2,
-            hand: []
-        },
-        {
-            uniqueId: 3,
-            hand: []
-        },
-    ]
+    // let cards = initCards(players);
+    // console.log(cards.players);
+    // console.log(cards.deck.length);
+    // cards.players = [
+    //     {
+    //         uniqueId: 1,
+    //         hand: []
+    //     },
+    //     {
+    //         uniqueId: 2,
+    //         hand: []
+    //     },
+    //     {
+    //         uniqueId: 3,
+    //         hand: []
+    //     },
+    // ];
 
-    cards = dealCards(cards, 1);
-    console.log(cards);
-    console.log(cards.players[0]);
-    console.log(cards.players[1]);
-    console.log(cards.players[2]);
-    console.log(cards.deck.length);
-    console.log(cards.deck.findIndex(card => card === cards.players[0].hand[0]));
+    // cards = dealCards(cards, 1);
+    // console.log(cards);
+    // console.log(cards.players[0]);
+    // console.log(cards.players[1]);
+    // console.log(cards.players[2]);
+    // console.log(cards.deck.length);
+    // console.log(cards.deck.findIndex(card => card === cards.players[0].hand[0]));
 
-    let bets = initBets(cards.players, 1);
-    console.log(bets);
+    // let bets = initBets(cards.players, 1);
+    // console.log(bets);
+
+    // let players = initPlayers();
 });
 
 const rounds = [];
 let players = [];
+let roundPlayers = [];
 var numOfPlayers = 0;
 let host = {};
+let scoreboard = {};
 
 
-let cards = [];
+let isLobbyDisabled = false;
+
+let cards = {};
 let bets = [];
 let currentRound = 1;
 let modifier = 1;
@@ -89,18 +95,62 @@ io.on("connection", socket => {
     });
 
     // GAME STARTS
-    socket.on('start game', (players) => {
-        cards = initCards(players);
-        cards = dealCards(cards, 1);
-
-        bets = initBets(players, 1);
-        statuses = initStatuses(players);
-
-        // send everyone the other people's cards -- Im lazy do it on frontend
-        socket.broadcast.emit(cards);
+    socket.on('start game', () => {
+        // set up round 1
+        setUpRound(currentRound);
+        socket.broadcast.emit('go to game');
+    });
+    socket.on('get current round', () => {
+        socket.emit('current round is', currentRound);
+    });
+    socket.on('get round data', (data) => {
+        let roundData = {};
+        console.log(players.find(user => user.uniqueId === data.id));
+        // draw cards for everyone -> done on round setup
+        // myHand
+        roundData.myHand = getRoundHand(data);
+        console.log(roundData.myHand);
+        // myBets
+        const userBetInd = bets.findIndex(bet => bet.uniqueId === data.id);
+        roundData.myBets = bets[userBetInd];
+        // other players
+        roundData.players = roundPlayers.filter(player => player.uniqueId !== data.id);
+        roundData.trumpCard = cards.trump;
+        socket.emit('round data', roundData);
     });
 });
 
+function getRoundHand(data) {
+    if (data.round === 1) {
+        const hands = [];
+        cards.players.filter(player => player.uniqueId !== data.id).forEach(player => {
+            hands.push(cards.players.filter(user => user.uniqueId === player.uniqueId)[0]);
+        });
+        return hands;
+    } else {
+        const ind = cards.players.findIndex(player => player.uniqueId === data.id);
+        return cards.players[ind];
+    }
+}
+function setUpRound(currentRound) {
+    cards = Object.assign({}, initCards(players));
+    cards = Object.assign({}, dealCards(cards, currentRound));
+    cards = Object.assign({}, dealTrumpCard(cards));
+    bets = initBets(players, currentRound);
+    roundPlayers = initPlayers(players);
+}
+function initPlayers(players) {
+    const hostInd = players.findIndex(player => player.isHost === true);
+    players.forEach((player, ind, arr) => {
+        player.bets = {bet: 0, hits: 0};
+        player.status = 'Still betting...';
+        player.seatInd = ind;
+        player.isDealer = player.isHost;
+        player.isFirst = (ind === hostInd + 1) ? true : false;
+        player.isReady = false;
+    });
+    return players;
+}
 function initBets(players, round) {
     const array = [];
     players.forEach(player => {
@@ -118,9 +168,6 @@ function initBets(players, round) {
     });
     return array;
 }
-
-
-
 function dealCards(cards, numCards) {
     cards.players.forEach(player => {
         for (let i = 0; i < numCards; i++) {
@@ -130,14 +177,20 @@ function dealCards(cards, numCards) {
     return cards;
 }
 function dealCardTo(player, cards) {
-    console.log('before card is dealt to player length of deck is:');
-    console.log(cards.deck.length);
     const ind = cards.players.findIndex(user => user.uniqueId === player.uniqueId);
-    const stuff = getRandomInt(0, cards.deck.length);
+    const stuff = getRandomInt(0, cards.deck.length - 1);
+
     cards.players[ind].hand.push(cards.deck[stuff]);
     cards.deck.splice(stuff, 1);
-    console.log('after card is dealt to player length of deck is:');
-    console.log(cards.deck.length);
+
+    return cards;
+}
+function dealTrumpCard(cards) {
+    const stuff = getRandomInt(0, cards.deck.length);
+
+    cards.trump = cards.deck[stuff];
+    cards.deck.splice(stuff, 1);
+
     return cards;
 }
 function getRandomInt(min, max) {
@@ -146,29 +199,28 @@ function getRandomInt(min, max) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 function initCards(players) {
-    let cards = {
+    let out = {
         deck: [],
         players: []
     };
     // Deck Init
     const suits = getSuits();
     for (let i = 2; i <= 10; i++) {
-        cards.deck = cards.deck.concat( generateCards(String(i), i, suits) );
+        out.deck = out.deck.concat( generateCards(String(i), i, suits) );
     }
-    cards.deck = cards.deck.concat( generateCards('J', 11, suits) );
-    cards.deck = cards.deck.concat( generateCards('Q', 12, suits) );
-    cards.deck = cards.deck.concat( generateCards('K', 13, suits) );
-    cards.deck = cards.deck.concat( generateCards('A', 14, suits) );
-    cards.deck = Array.from(shuffle( cards.deck ));
+    out.deck = out.deck.concat( generateCards('J', 11, suits) );
+    out.deck = out.deck.concat( generateCards('Q', 12, suits) );
+    out.deck = out.deck.concat( generateCards('K', 13, suits) );
+    out.deck = out.deck.concat( generateCards('A', 14, suits) );
+    out.deck = Array.from(shuffle( out.deck ));
     // Players Init
     players.forEach(player => {
-        cards.players.push({
-            ...player,
+        out.players.push({
+            uniqueId: player.uniqueId,
             hand: []
         });
     });
-
-    return cards;
+    return out;
 }
 function getSuits() {
     return {
