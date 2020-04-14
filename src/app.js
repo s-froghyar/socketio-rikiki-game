@@ -5,36 +5,6 @@ var fs = require('fs');
 
 http.listen(4444, function () {
     console.log("Let's go!");
-    // let cards = initCards(players);
-    // console.log(cards.players);
-    // console.log(cards.deck.length);
-    // cards.players = [
-    //     {
-    //         uniqueId: 1,
-    //         hand: []
-    //     },
-    //     {
-    //         uniqueId: 2,
-    //         hand: []
-    //     },
-    //     {
-    //         uniqueId: 3,
-    //         hand: []
-    //     },
-    // ];
-
-    // cards = dealCards(cards, 1);
-    // console.log(cards);
-    // console.log(cards.players[0]);
-    // console.log(cards.players[1]);
-    // console.log(cards.players[2]);
-    // console.log(cards.deck.length);
-    // console.log(cards.deck.findIndex(card => card === cards.players[0].hand[0]));
-
-    // let bets = initBets(cards.players, 1);
-    // console.log(bets);
-
-    // let players = initPlayers();
 });
 
 const rounds = [];
@@ -51,6 +21,7 @@ let cards = {};
 let bets = [];
 let currentRound = 1;
 let modifier = 1;
+let roundBets = [];
 
 io.on("connection", socket => {
     var addedUser = false;
@@ -62,20 +33,29 @@ io.on("connection", socket => {
     });
     // when the client emits 'add user', this listens and executes
     socket.on('add new user', (user) => {
-        ++numOfPlayers;
-        addedUser = true;
-        host = numOfPlayers === 1 ? Object.assign({}, user) : host;
-        user = { ...user, isHost: numOfPlayers === 1 };
-        players.push(user);
-
-        socket.emit('joining lobby', { user, players });
-        socket.broadcast.emit('user joined', user);
-        console.log('Added ' + user.username + ' to the game');
+        console.log('Trying to add new user . . .');
+        if (!isLobbyDisabled) {
+            ++numOfPlayers;
+            addedUser = true;
+            host = numOfPlayers === 1 ? Object.assign({}, user) : host;
+            user = { ...user, isHost: numOfPlayers === 1 };
+            players.push(user);
+    
+            socket.emit('joining lobby', { user, players });
+            socket.broadcast.emit('user joined', user);
+            socket.id = user.uniqueId;
+            console.log('Added ' + user.username + ' to the game');
+        } else {
+            console.log('Game started cant add user');
+            socket.emit('joining lobby', 401);
+        }
     });
     socket.on('override user', player => {
         console.log('Overriding user: ', player)
         const patchedPlayerInd = players.findIndex(user => user.uniqueId === player.uniqueId);
         players[patchedPlayerInd] = Object.assign({}, player);
+        socket.emit('joining lobby', { player, players });
+        console.log('Added ' + user.username + ' back to the game');
     });
     socket.on('get lobby players', () => {
         socket.emit('lobby players', players);
@@ -93,9 +73,18 @@ io.on("connection", socket => {
         }
         socket.broadcast.emit('player updated', {id : player.uniqueId, player});
     });
-
+    // AUTH0
+    socket.on('is auth', id => {
+        if (isLobbyDisabled) {
+            console.log('is authorized to go in');
+            socket.emit('can log in', players.findIndex(player => player.uniqueId === id) > -1) ;
+        } else {
+            socket.emit('can log in', true);
+        }
+    });
     // GAME STARTS
     socket.on('start game', () => {
+        isLobbyDisabled = true;
         // set up round 1
         setUpRound(currentRound);
         socket.broadcast.emit('go to game');
@@ -108,7 +97,15 @@ io.on("connection", socket => {
         console.log(players.find(user => user.uniqueId === data.id));
         // draw cards for everyone -> done on round setup
         // myHand
-        roundData.myHand = getRoundHand(data);
+        roundData.myHand = {
+            myHand: [],
+            firstRoundHand: []
+        };
+        if (data.round === 1) {
+            roundData.myHand.firstRoundHand = getRoundHand(data);
+        } else {
+            roundData.myHand.myHand = getRoundHand(data);
+        }
         console.log(roundData.myHand);
         // myBets
         const userBetInd = bets.findIndex(bet => bet.uniqueId === data.id);
@@ -116,10 +113,56 @@ io.on("connection", socket => {
         // other players
         roundData.players = roundPlayers.filter(player => player.uniqueId !== data.id);
         roundData.trumpCard = cards.trump;
+        roundData.me = roundPlayers.find(player => player.uniqueId === data.id);
         socket.emit('round data', roundData);
     });
-});
+    // Betting
+    socket.on('making a bet', (bet) => {
+        // adding bet
+        console.log('adding bet', bet);
+        roundBets.push(bet);
+        const playerInd = roundPlayers.findIndex(player => player.uniqueId === bet.uniqueId);
+        roundPlayers[playerInd].bets = Object.assign({}, bet);
+        console.log('bet was made');
+        console.log(roundBets);
+        socket.broadcast.emit('diff player made a bet', bet);
 
+        // what if sum is wrong
+        if (dealerNeedsToChange(roundBets)) {
+            const dealerBet = getDealer().bet;
+            // betting options are restricted to ones that are not the dealer's choice --> he needs to change
+            const bettingOptions = getDealer().bettingOptions.filter(bet => bet !== dealerBet);
+            socket.broadcast.emit('dealer change bet', bettingOptions);
+            socket.emit('dealer change bet', bettingOptions);
+            console.log('dealer instructed to bet again', getDealer());
+            console.log(bettingOptions);
+        }
+    });
+    socket.on('dealer changed bet', (value) => {
+        const dealerInd = roundPlayers.findIndex(player => player.isDealer);
+        roundPlayers[dealerInd].bets.bet = value;
+        socket.broadcast.emit('diff player made a bet', bet);
+    });
+});
+function getDealer() {
+    const dealerInd = roundPlayers.findIndex(player => player.isDealer);
+    console.log(dealerInd);
+    console.log(roundPlayers);
+    return roundPlayers[dealerInd];
+}
+function dealerNeedsToChange(bets) {
+    let accum = 0;
+    bets.forEach(betObj => {
+        console.log(betObj.bet);
+        accum = accum + betObj.bet;
+    });
+    console.log('bets.len', bets.length);
+    console.log('roundplayers.len', roundPlayers.length);
+    console.log('accum', accum);
+    console.log('round', currentRound);
+    return bets.length === roundPlayers.length
+        && accum === currentRound;
+}
 function getRoundHand(data) {
     if (data.round === 1) {
         const hands = [];
