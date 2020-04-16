@@ -129,9 +129,10 @@ io.on("connection", socket => {
 
         // what if sum is wrong
         if (dealerNeedsToChange(roundBets)) {
-            const dealerBet = getDealer().bet;
+            const dealerBet = getDealer().bets;
+            console.log('dealerBet', dealerBet);
             // betting options are restricted to ones that are not the dealer's choice --> he needs to change
-            const bettingOptions = getDealer().bettingOptions.filter(bet => bet !== dealerBet);
+            const bettingOptions = getDealer().bets.bettingOptions.filter(bet => bet !== dealerBet.bet);
             socket.broadcast.emit('dealer change bet', bettingOptions);
             socket.emit('dealer change bet', bettingOptions);
             console.log('dealer instructed to bet again', getDealer());
@@ -141,7 +142,9 @@ io.on("connection", socket => {
     socket.on('dealer changed bet', (value) => {
         const dealerInd = roundPlayers.findIndex(player => player.isDealer);
         roundPlayers[dealerInd].bets.bet = value;
-        socket.broadcast.emit('diff player made a bet', bet);
+        socket.broadcast.emit('reveal bets', roundBets);
+        socket.emit('reveaul bets', roundBets);
+        roundBets = [];
     });
 });
 function getDealer() {
