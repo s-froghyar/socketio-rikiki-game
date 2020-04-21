@@ -12,7 +12,7 @@ let players = [];
 let roundPlayers = [];
 var numOfPlayers = 0;
 let host = {};
-let scoreboard = {};
+let scoreboard = [];
 
 
 let isLobbyDisabled = false;
@@ -20,11 +20,10 @@ let isLobbyDisabled = false;
 let cards = {};
 let bets = [];
 let currentRound = 1;
-let modifier = 1;
+let modifier = 0;
 let roundBets = [];
 
 io.on("connection", socket => {
-    var addedUser = false;
     // On landing
     socket.on('landing', (id) => {
         console.log(id);
@@ -86,34 +85,14 @@ io.on("connection", socket => {
     socket.on('start game', () => {
         isLobbyDisabled = true;
         // set up round 1
-        setUpRound(currentRound);
+        setUpFirstRound(currentRound);
         socket.broadcast.emit('go to game');
     });
     socket.on('get current round', () => {
         socket.emit('current round is', currentRound);
     });
     socket.on('get round data', (data) => {
-        let roundData = {};
-        console.log(players.find(user => user.uniqueId === data.id));
-        // draw cards for everyone -> done on round setup
-        // myHand
-        roundData.myHand = {
-            myHand: [],
-            firstRoundHand: []
-        };
-        if (data.round === 1) {
-            roundData.myHand.firstRoundHand = getRoundHand(data);
-        } else {
-            roundData.myHand.myHand = getRoundHand(data);
-        }
-        console.log(roundData.myHand);
-        // myBets
-        const userBetInd = bets.findIndex(bet => bet.uniqueId === data.id);
-        roundData.myBets = bets[userBetInd];
-        // other players
-        roundData.players = roundPlayers.filter(player => player.uniqueId !== data.id);
-        roundData.trumpCard = cards.trump;
-        roundData.me = roundPlayers.find(player => player.uniqueId === data.id);
+        const roundData = getRoundData(data);
         socket.emit('round data', roundData);
     });
     // Betting
@@ -137,16 +116,161 @@ io.on("connection", socket => {
             socket.emit('dealer change bet', bettingOptions);
             console.log('dealer instructed to bet again', getDealer());
             console.log(bettingOptions);
+        } else if (roundBets.length === roundPlayers.length) {
+            if (currentRound === 1) {
+                const firstRoundData = getFirstRoundResults();
+                socket.broadcast.emit('play out first round', firstRoundData);
+                socket.emit('play out first round', firstRoundData);
+                roundBets = [];
+            } else {
+                socket.broadcast.emit('reveal bets', roundBets);
+                socket.emit('reveal bets', roundBets);
+                roundBets = [];
+            }
         }
     });
     socket.on('dealer changed bet', (value) => {
         const dealerInd = roundPlayers.findIndex(player => player.isDealer);
         roundPlayers[dealerInd].bets.bet = value;
-        socket.broadcast.emit('reveal bets', roundBets);
-        socket.emit('reveaul bets', roundBets);
+        if (currentRound === 1) {
+            const firstRoundData = getFirstRoundResults();
+            socket.broadcast.emit('play out first round', firstRoundData);
+            socket.emit('play out first round', firstRoundData);
+            roundBets = [];
+        } else {
+            socket.broadcast.emit('reveal bets', roundBets);
+            socket.emit('reveal bets', roundBets);
+            roundBets = [];
+        }
         roundBets = [];
     });
+    // Play cards
+    socket.on('card played', () => {
+        console.log('yeeet'); 
+     });
+    // Init next round
+    socket.on('set up next round', () => {
+        currentRound++;
+        if (currentRound > (52 / roundPlayers)) {
+            modifier -= 2;
+        }
+        setUpNextRound(currentRound + modifier);
+        console.log('Round setup');
+        console.log(roundPlayers);
+        console.log(cards);
+        socket.broadcast.emit('start next round', currentRound);
+    });
 });
+function getRoundData(data) {
+    let roundData = {};
+    // myHand
+    roundData.myHand = {
+        myHand: [],
+        firstRoundHand: []
+    };
+    if (data.round === 1) {
+        roundData.myHand.firstRoundHand = getRoundHand(data);
+    } else {
+        roundData.myHand.myHand = getRoundHand(data);
+    }
+    console.log(roundData.myHand);
+    // myBets
+    const userBetInd = bets.findIndex(bet => bet.uniqueId === data.id);
+    roundData.myBets = bets[userBetInd];
+    // other players
+    roundData.players = roundPlayers.filter(player => player.uniqueId !== data.id);
+    roundData.trumpCard = cards.trump;
+    // me
+    roundData.me = roundPlayers.find(player => player.uniqueId === data.id);
+    return roundData;
+}
+function getFirstRoundResults() {
+    // create order index for seats to be playing
+    const seatIndOrder = getSeatIndOrder();
+    console.log(seatIndOrder);
+    const baseHandId = roundPlayers.find(player => player.seatInd === seatIndOrder[0]).uniqueId;
+    const base = cards.players.find(player => player.uniqueId === baseHandId);
+    console.log(base);
+    const pile = [];
+    let winnerId;
+    // get hands
+    seatIndOrder.forEach(seatInd => {
+        const handId = roundPlayers.find(player => player.seatInd === seatInd).uniqueId;
+        const currentHand = cards.players.find(player => player.uniqueId === handId);
+        pile.push(currentHand);
+    });
+    const trumps = pile.filter(card => card.hand[0].suit === cards.trump.suit);
+    const baseCards = pile.filter(card => card.hand[0].suit === base.hand[0].suit);
+    if (trumps.length > 0) {
+        winnerId = getMaxId(trumps);
+    } else if (baseCards.length > 0) {
+        winnerId = getMaxId(baseCards);
+    }
+    console.log('winner: ', winnerId);
+    // allocate hit
+    const winnerInd = roundPlayers.findIndex(player => player.uniqueId === winnerId);
+    const betWinnerInd = roundBets.findIndex(player => player.uniqueId === winnerId);
+    roundPlayers[winnerInd].bets.hits++;
+    roundBets[betWinnerInd].hits++;
+    // allocate points
+    console.log(scoreboard);
+    allocatePoints(roundPlayers);
+    console.log(scoreboard);
+    return {
+        winnerId,
+        scoreboard,
+        seatIndOrder,
+        roundBets,
+        cards: cards.players
+    }
+}
+function allocatePoints(users) {
+    users.forEach(playa => {
+        const sbInd = scoreboard.findIndex(user => user.uniqueId === playa.uniqueId);
+        console.log(`allocating points for ${sbInd}`);
+        scoreboard[sbInd].points += getRoundPoint(playa);
+    });
+}
+function getRoundPoint(user) {
+    const diff = Math.abs(user.bets.bet - user.bets.hits);
+    console.log(`diff of ${user.bets.bet} and ${user.bets.hits} is ${diff}`);
+    if (diff === 0) {
+        return (10 + (diff * 2));
+    } else {
+        return (diff * (-2));
+    }
+}
+function getMaxId(pile) {
+    let winnerId;
+    let currentMaxVal = 0;
+    pile.forEach(hand => {
+        if (hand.hand[0].value > currentMaxVal) {
+            currentMaxVal = hand.hand[0].value;
+            winnerId = hand.uniqueId;
+        }
+    });
+    return winnerId;
+}
+function getSeatIndOrder() {
+    const out = [];
+    const playerLen = roundPlayers.length;
+    let currentInd = roundPlayers.find(player => player.isFirst).seatInd;
+    out.push(currentInd);
+    console.log('curr ind: ', currentInd);
+    for (var i = 0; i < playerLen - 1; i++) {
+        console.log(currentInd + 1 === playerLen);
+        console.log(currentInd + 1);
+        console.log(playerLen);
+        
+        if (currentInd + 1 === playerLen) {
+            currentInd = 0;
+        } else {
+            currentInd++;
+        }
+        out.push(currentInd);
+    }
+    return out;
+}
 function getDealer() {
     const dealerInd = roundPlayers.findIndex(player => player.isDealer);
     console.log(dealerInd);
@@ -159,10 +283,7 @@ function dealerNeedsToChange(bets) {
         console.log(betObj.bet);
         accum = accum + betObj.bet;
     });
-    console.log('bets.len', bets.length);
-    console.log('roundplayers.len', roundPlayers.length);
-    console.log('accum', accum);
-    console.log('round', currentRound);
+
     return bets.length === roundPlayers.length
         && accum === currentRound;
 }
@@ -178,12 +299,44 @@ function getRoundHand(data) {
         return cards.players[ind];
     }
 }
-function setUpRound(currentRound) {
+function setUpNextRound(cardsToDeal) {
+    // modifier should be set here already
+    // deal new cards
+    cards = Object.assign({}, initCards(players));
+    cards = Object.assign({}, dealCards(cards, cardsToDeal));
+    cards = Object.assign({}, dealTrumpCard(cards));
+    // reset bets
+    bets = initBets(players, cardsToDeal);
+    // players needs to update
+    const prevDealerSeatInd = roundPlayers.find(player => player.isDealer).seatInd;
+    const nextDealerSeatInd = prevDealerSeatInd + 1 === roundPlayers.length ? 0 : prevDealerSeatInd + 1;
+    const nextFirstSeatInd = nextDealerSeatInd + 1 === roundPlayers.length ? 0 : nextDealerSeatInd + 1;
+    roundPlayers.forEach(player => {
+        player.bets = bets.find(bet => bet.uniqueId === player.uniqueId);
+        player.status = 'Still betting...';
+        player.isReady = false;
+        player.isDealer = nextDealerSeatInd === player.seatInd;
+        player.isFirst = nextFirstSeatInd === player.seatInd;
+    });
+}
+function setUpFirstRound(currentRound) {
     cards = Object.assign({}, initCards(players));
     cards = Object.assign({}, dealCards(cards, currentRound));
     cards = Object.assign({}, dealTrumpCard(cards));
     bets = initBets(players, currentRound);
     roundPlayers = initPlayers(players);
+    scoreboard = Array.from(initScoreboard(roundPlayers));
+    console.log(cards);
+}
+function initScoreboard(users) {
+    const out = [];
+    users.forEach(user => {
+        out.push({
+            uniqueId: user.uniqueId,
+            points: 0
+        });
+    })
+    return out;
 }
 function initPlayers(players) {
     const hostInd = players.findIndex(player => player.isHost === true);
