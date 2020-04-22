@@ -14,6 +14,9 @@ var numOfPlayers = 0;
 let host = {};
 let scoreboard = [];
 
+let hitPile = [];
+let hitBase;
+let hitWinner;
 
 let isLobbyDisabled = false;
 
@@ -125,7 +128,6 @@ io.on("connection", socket => {
             } else {
                 socket.broadcast.emit('reveal bets', roundBets);
                 socket.emit('reveal bets', roundBets);
-                roundBets = [];
             }
         }
     });
@@ -145,8 +147,35 @@ io.on("connection", socket => {
         roundBets = [];
     });
     // Play cards
-    socket.on('card played', () => {
-        console.log('yeeet'); 
+    socket.on('card played', (card) => {
+        console.log('yeeet');
+        const winnerId = playCard(card);
+        if (winnerId !== void 0) {
+            console.log('hit win or round end');
+            console.log(cards.players);
+            if (cards.players[0].hand.length === 0) {
+                // end of the round allocate points
+                console.log('Winner of round is being declared');
+                allocatePoints(roundPlayers);
+                socket.emit('round finished', {scoreboard, roundBets})
+                socket.broadcast.emit('round finished', {scoreboard, roundBets})
+                console.log({scoreboard, roundBets});
+            } else {
+                // meaning there is a winner for this hit
+                // tell people the winnerId and roundBets
+                console.log('Hit winner is declared');
+                socket.broadcast.emit('hit winner is', {winnerId});
+                socket.emit('hit winner is', {winnerId});
+                console.log({winnerId});
+            }
+        } else {
+            // tell people somebody played a card
+            // and next playter to go
+            console.log('Somebody played a card');
+            const nextId = getNextToPlayId(card.uniqueId);
+            socket.broadcast.emit('somebody played card', {card, nextId});
+            console.log({card, nextId});
+        }
      });
     // Init next round
     socket.on('set up next round', () => {
@@ -161,6 +190,64 @@ io.on("connection", socket => {
         socket.broadcast.emit('start next round', currentRound);
     });
 });
+function getNextToPlayId(prevId) {
+    let prevSeatInd = roundPlayers.find(player => player.uniqueId === prevId).seatInd;
+    let newSeatInd;
+    const playerLen = roundPlayers.length;
+    if (prevSeatInd + 1 === playerLen) {
+        newSeatInd = 0;
+    } else {
+        newSeatInd = prevSeatInd + 1;
+    }
+    return roundPlayers.find(player => player.seatInd === newSeatInd).uniqueId;
+}
+function playCard(card) {
+    let winnerId;
+    // handle base
+    if (hitPile.length === 0) {
+        hitBase = Object.assign({}, card);
+    }
+    // play card and remove from player hand
+    hitPile.push(card);
+    const playerInd = cards.players.findIndex(player => player.uniqueId === card.uniqueId);
+    const cardInd = cards.players[playerInd].hand.findIndex(playerCard =>
+        playerCard.value === card.value &&
+        playerCard.suit === card.suit);
+    cards.players[playerInd].hand.splice(cardInd, 1);
+
+    if (roundPlayers.length === hitPile.length) {
+        // last of hit -> allocate hit and set them as next
+        winnerId = getHitResult();
+    }
+    console.log('winner id is ', winnerId);
+    return winnerId;
+}
+function getHitResult() {
+    console.log('gettting hit results');
+    let winnerId = 0;
+    const trumps = hitPile.filter(card => card.suit === cards.trump.suit);
+    const baseCards = hitPile.filter(card => card.suit === hitBase.suit);
+    console.log(hitPile);
+    console.log(trumps);
+    console.log(baseCards);
+    
+    if (trumps.length > 0) {
+        winnerId = getMaxIdv2(trumps);
+    } else {
+        winnerId = getMaxIdv2(baseCards);
+    }
+    console.log(winnerId);
+    // alloc hits
+    const winnerInd = roundPlayers.findIndex(player => player.uniqueId === winnerId);
+    const betWinnerInd = roundBets.findIndex(player => player.uniqueId === winnerId);
+    console.log(winnerInd);
+    console.log(roundPlayers);
+    console.log(roundBets);
+    roundPlayers[winnerInd].bets.hits++;
+    roundBets[betWinnerInd].hits++;
+    hitPile = [];
+    return winnerId;
+}
 function getRoundData(data) {
     let roundData = {};
     // myHand
@@ -239,6 +326,20 @@ function getRoundPoint(user) {
     } else {
         return (diff * (-2));
     }
+}
+function getMaxIdv2(pile) {
+    let winnerId;
+    let currentMaxVal = 0;
+    console.log(pile);
+    pile.forEach(card => {
+        console.log(card);
+        console.log(currentMaxVal);
+        if (card.value > currentMaxVal) {
+            currentMaxVal = card.value;
+            winnerId = card.uniqueId;
+        }
+    });
+    return winnerId;
 }
 function getMaxId(pile) {
     let winnerId;
