@@ -152,7 +152,6 @@ io.on("connection", socket => {
         const winnerId = playCard(card);
         if (winnerId !== void 0) {
             console.log('hit win or round end');
-            console.log(cards.players);
             if (cards.players[0].hand.length === 0) {
                 // end of the round allocate points
                 console.log('Winner of round is being declared');
