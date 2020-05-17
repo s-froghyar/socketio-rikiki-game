@@ -108,7 +108,7 @@ io.on("connection", socket => {
         console.log('bet was made');
         console.log(roundBets);
         socket.broadcast.emit('diff player made a bet', bet);
-
+        console.log(roundPlayers);
         // what if sum is wrong
         if (dealerNeedsToChange(roundBets)) {
             const dealerBet = getDealer().bets;
@@ -150,15 +150,15 @@ io.on("connection", socket => {
     socket.on('card played', (card) => {
         console.log('yeeet');
         const winnerId = playCard(card);
-        if (winnerId !== void 0) {
+        if (winnerId !== undefined) {
             console.log('hit win or round end');
             if (cards.players[0].hand.length === 0) {
                 // end of the round allocate points
                 console.log('Winner of round is being declared');
                 allocatePoints(roundPlayers);
-                socket.emit('round finished', {scoreboard, roundBets})
-                socket.broadcast.emit('round finished', {scoreboard, roundBets})
-                console.log({scoreboard, roundBets});
+                socket.emit('round finished', {scoreboard, roundBets, lastCard: card})
+                socket.broadcast.emit('round finished', {scoreboard, roundBets, lastCard: card})
+                console.log({scoreboard, roundBets, lastCard: card});
             } else {
                 // meaning there is a winner for this hit
                 // tell people the winnerId and roundBets
@@ -407,6 +407,7 @@ function setUpNextRound(cardsToDeal) {
     cards = Object.assign({}, dealTrumpCard(cards));
     // reset bets
     bets = initBets(players, cardsToDeal);
+    roundBets = [];
     // players needs to update
     const prevDealerSeatInd = roundPlayers.find(player => player.isDealer).seatInd;
     const nextDealerSeatInd = prevDealerSeatInd + 1 === roundPlayers.length ? 0 : prevDealerSeatInd + 1;
@@ -433,6 +434,7 @@ function initScoreboard(users) {
     users.forEach(user => {
         out.push({
             uniqueId: user.uniqueId,
+            name: user.username,
             points: 0
         });
     })
@@ -485,7 +487,12 @@ function dealCardTo(player, cards) {
     return cards;
 }
 function dealTrumpCard(cards) {
-    const stuff = getRandomInt(0, cards.deck.length);
+    let isValidTrump = false;
+    let stuff = 0;
+    while (!isValidTrump) {
+        stuff = getRandomInt(0, cards.deck.length);
+        isValidTrump = cards.deck[stuff] !== undefined;
+    }
 
     cards.trump = cards.deck[stuff];
     cards.deck.splice(stuff, 1);
