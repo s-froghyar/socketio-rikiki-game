@@ -25,6 +25,7 @@ let bets = [];
 let currentRound = 1;
 let modifier = 0;
 let roundBets = [];
+let isLastRound = false;
 
 io.on("connection", socket => {
     // On landing
@@ -96,52 +97,67 @@ io.on("connection", socket => {
     });
     socket.on('get round data', (data) => {
         const roundData = getRoundData(data);
-        socket.emit('round data', roundData);
+        socket.emit('round data', {roundData, isLastRound});
     });
     // Betting
     socket.on('making a bet', (bet) => {
-        // adding bet
-        console.log('adding bet', bet);
-        roundBets.push(bet);
-        const playerInd = roundPlayers.findIndex(player => player.uniqueId === bet.uniqueId);
-        roundPlayers[playerInd].bets = Object.assign({}, bet);
-        console.log('bet was made');
-        console.log(roundBets);
-        socket.broadcast.emit('diff player made a bet', bet);
-        console.log(roundPlayers);
-        // what if sum is wrong
-        if (dealerNeedsToChange(roundBets)) {
-            const dealerBet = getDealer().bets;
-            console.log('dealerBet', dealerBet);
-            // betting options are restricted to ones that are not the dealer's choice --> he needs to change
-            const bettingOptions = getDealer().bets.bettingOptions.filter(bet => bet !== dealerBet.bet);
-            socket.broadcast.emit('dealer change bet', bettingOptions);
-            socket.emit('dealer change bet', bettingOptions);
-            console.log('dealer instructed to bet again', getDealer());
-            console.log(bettingOptions);
-        } else if (roundBets.length === roundPlayers.length) {
+        if (bet.isDealerBet) {
+            const betInd = roundBets.findIndex(roundBet => bet.uniqueId === roundBet.uniqueId);
+            roundBets.splice(betInd, 1);
+            roundBets.push(bet);
+            const playerInd = roundPlayers.findIndex(player => player.uniqueId === bet.uniqueId);
+            roundPlayers[playerInd].bets = Object.assign({}, bet);
             if (currentRound === 1) {
                 const firstRoundData = getFirstRoundResults();
-                socket.broadcast.emit('play out first round', firstRoundData);
-                socket.emit('play out first round', firstRoundData);
-                roundBets = [];
+                // socket.broadcast.emit('play out first round', {firstRoundData, isDealerChangeNeeded, options});
+                io.emit('play out first round', {firstRoundData, isDealerChangeNeeded, options});
             } else {
-                socket.broadcast.emit('reveal bets', roundBets);
-                socket.emit('reveal bets', roundBets);
+                // socket.broadcast.emit('reveal bets', {roundBets, isDealerChangeNeeded: false, options: []});
+                io.emit('reveal bets', {roundBets, isDealerChangeNeeded: false, options: []});    
+            }
+        } else {
+            // adding bet
+            console.log('adding bet', bet);
+            roundBets.push(bet);
+            const playerInd = roundPlayers.findIndex(player => player.uniqueId === bet.uniqueId);
+            roundPlayers[playerInd].bets = Object.assign({}, bet);
+            console.log('bet was made');
+            console.log(roundBets);
+            socket.broadcast.emit('diff player made a bet', bet);
+            console.log(roundPlayers);
+            // what if sum is wrong
+            if (roundBets.length === roundPlayers.length) {
+                const isDealerChangeNeeded = dealerNeedsToChange(roundBets);
+                let options = [];
+                if (isDealerChangeNeeded) {
+                    const dealerBet = getDealer().bets;
+                    options = getDealer().bets.bettingOptions.filter(bet => bet !== dealerBet.bet);
+                }
+                if (currentRound === 1) {
+                    const firstRoundData = getFirstRoundResults(isDealerChangeNeeded);
+                    // socket.broadcast.emit('play out first round', {firstRoundData, isDealerChangeNeeded, options});
+                    io.emit('play out first round', {firstRoundData, isDealerChangeNeeded, options});
+                    roundBets = [];
+                } else {
+                    // socket.broadcast.emit('reveal bets', {roundBets, isDealerChangeNeeded, options});
+                    io.emit('reveal bets', {roundBets, isDealerChangeNeeded, options});
+                }
             }
         }
     });
     socket.on('dealer changed bet', (value) => {
         const dealerInd = roundPlayers.findIndex(player => player.isDealer);
         roundPlayers[dealerInd].bets.bet = value;
+        console.log(value);
+        console.log(roundPlayers);
         if (currentRound === 1) {
             const firstRoundData = getFirstRoundResults();
-            socket.broadcast.emit('play out first round', firstRoundData);
-            socket.emit('play out first round', firstRoundData);
+            // socket.broadcast.emit('play out first round', firstRoundData);
+            io.emit('play out first round', firstRoundData);
             roundBets = [];
         } else {
-            socket.broadcast.emit('reveal bets', roundBets);
-            socket.emit('reveal bets', roundBets);
+            // socket.broadcast.emit('reveal bets', {roundBets, isDealerChangeNeeded: false, options: []});
+            io.emit('reveal bets', {roundBets, isDealerChangeNeeded: false, options: []});
             roundBets = [];
         }
         roundBets = [];
@@ -156,15 +172,15 @@ io.on("connection", socket => {
                 // end of the round allocate points
                 console.log('Winner of round is being declared');
                 allocatePoints(roundPlayers);
-                socket.emit('round finished', {scoreboard, roundBets, lastCard: card})
-                socket.broadcast.emit('round finished', {scoreboard, roundBets, lastCard: card})
+                io.emit('round finished', {scoreboard, roundBets, lastCard: card})
+                // socket.broadcast.emit('round finished', {scoreboard, roundBets, lastCard: card})
                 console.log({scoreboard, roundBets, lastCard: card});
             } else {
                 // meaning there is a winner for this hit
                 // tell people the winnerId and roundBets
                 console.log('Hit winner is declared');
-                socket.broadcast.emit('hit winner is', {winnerId});
-                socket.emit('hit winner is', {winnerId});
+                // socket.broadcast.emit('hit winner is', {winnerId});
+                io.emit('hit winner is', {winnerId});
                 console.log({winnerId});
             }
         } else {
@@ -183,6 +199,7 @@ io.on("connection", socket => {
             modifier -= 2;
         }
         setUpNextRound(currentRound + modifier);
+        isLastRound = modifier < 0 && currentRound + modifier === 1;
         console.log('Round setup');
         console.log(roundPlayers);
         console.log(cards);
@@ -270,7 +287,16 @@ function getRoundData(data) {
     roundData.me = roundPlayers.find(player => player.uniqueId === data.id);
     return roundData;
 }
-function getFirstRoundResults() {
+function getFirstRoundResults(isDealerChangeNeeded) {
+    if (isDealerChangeNeeded) {
+        return {
+            winnerId: -1,
+            scoreboard: {},
+            seatIndOrder: [],
+            roundBets: {},
+            cards: []
+        };
+    }
     // create order index for seats to be playing
     const seatIndOrder = getSeatIndOrder();
     console.log(seatIndOrder);
