@@ -7,7 +7,6 @@ http.listen(4444, function () {
     console.log("Let's go!");
 });
 
-const rounds = [];
 let players = [];
 let roundPlayers = [];
 var numOfPlayers = 0;
@@ -16,7 +15,6 @@ let scoreboard = [];
 
 let hitPile = [];
 let hitBase;
-let hitWinner;
 
 let isLobbyDisabled = false;
 
@@ -26,6 +24,10 @@ let currentRound = 1;
 let modifier = 0;
 let roundBets = [];
 let isLastRound = false;
+
+let roundStage = 'betting';
+let betsRevealed = false;
+let roundPointsAllocated = false;
 
 io.on("connection", socket => {
     // On landing
@@ -37,6 +39,8 @@ io.on("connection", socket => {
     // when the client emits 'add user', this listens and executes
     socket.on('add new user', (user) => {
         console.log('Trying to add new user . . .');
+        console.log(user);
+        
         if (!isLobbyDisabled) {
             ++numOfPlayers;
             addedUser = true;
@@ -107,12 +111,16 @@ io.on("connection", socket => {
             roundBets.push(bet);
             const playerInd = roundPlayers.findIndex(player => player.uniqueId === bet.uniqueId);
             roundPlayers[playerInd].bets = Object.assign({}, bet);
-            if (currentRound === 1) {
+            if (currentRound === 1 || isLastRound) {
                 const firstRoundData = getFirstRoundResults();
                 // socket.broadcast.emit('play out first round', {firstRoundData, isDealerChangeNeeded, options});
                 io.emit('play out first round', {firstRoundData, isDealerChangeNeeded, options});
+                if (isLastRound) {
+                    resetEverything();
+                }
             } else {
                 // socket.broadcast.emit('reveal bets', {roundBets, isDealerChangeNeeded: false, options: []});
+                betsRevealed = true;
                 io.emit('reveal bets', {roundBets, isDealerChangeNeeded: false, options: []});    
             }
         } else {
@@ -140,27 +148,11 @@ io.on("connection", socket => {
                     roundBets = [];
                 } else {
                     // socket.broadcast.emit('reveal bets', {roundBets, isDealerChangeNeeded, options});
+                    betsRevealed = true;
                     io.emit('reveal bets', {roundBets, isDealerChangeNeeded, options});
                 }
             }
         }
-    });
-    socket.on('dealer changed bet', (value) => {
-        const dealerInd = roundPlayers.findIndex(player => player.isDealer);
-        roundPlayers[dealerInd].bets.bet = value;
-        console.log(value);
-        console.log(roundPlayers);
-        if (currentRound === 1) {
-            const firstRoundData = getFirstRoundResults();
-            // socket.broadcast.emit('play out first round', firstRoundData);
-            io.emit('play out first round', firstRoundData);
-            roundBets = [];
-        } else {
-            // socket.broadcast.emit('reveal bets', {roundBets, isDealerChangeNeeded: false, options: []});
-            io.emit('reveal bets', {roundBets, isDealerChangeNeeded: false, options: []});
-            roundBets = [];
-        }
-        roundBets = [];
     });
     // Play cards
     socket.on('card played', (card) => {
@@ -172,6 +164,7 @@ io.on("connection", socket => {
                 // end of the round allocate points
                 console.log('Winner of round is being declared');
                 allocatePoints(roundPlayers);
+                roundPointsAllocated = true;
                 io.emit('round finished', {scoreboard, roundBets, lastCard: card})
                 // socket.broadcast.emit('round finished', {scoreboard, roundBets, lastCard: card})
                 console.log({scoreboard, roundBets, lastCard: card});
@@ -206,7 +199,17 @@ io.on("connection", socket => {
         socket.broadcast.emit('start next round', currentRound);
     });
 });
+function resetEverything() {
+    roundPlayers = [];
+    numOfPlayers = 0;
+    host = {};
+    scoreboard = [];
+    hitPile = [];
+}
 function getNextToPlayId(prevId) {
+    if (!prevId) {
+        return -1;
+    }
     let prevSeatInd = roundPlayers.find(player => player.uniqueId === prevId).seatInd;
     let newSeatInd;
     const playerLen = roundPlayers.length;
@@ -285,7 +288,37 @@ function getRoundData(data) {
     roundData.trumpCard = cards.trump;
     // me
     roundData.me = roundPlayers.find(player => player.uniqueId === data.id);
+
+    // roundstage
+    roundData.roundStage = getRoundStage(data);
     return roundData;
+}
+function getRoundStage(data) {
+    const stage = getStage();
+    switch (stage) {
+        case 'betting':
+            // check if user already made a bet or nah
+            console.log(roundBets);
+            console.log(data);
+            return { stage, madeBet: roundBets.findIndex(bet => bet.uniqueId === data.id) !== -1};
+        case 'playing':
+            // send out nextId and pile
+            return { stage, nextId: getNextToPlayId(hitPile[hitPile.length - 1].uniqueId), hitPile};
+        case 'results':
+            // get the points
+            return {stage, results: { scoreboard, roundBets }};
+        default:
+            return {stage};
+    }
+}
+function getStage() {
+    if (roundPointsAllocated) {
+        return 'results';
+    } else if (betsRevealed) {
+        return 'playing';
+    } else {
+        return 'betting';
+    }
 }
 function getFirstRoundResults(isDealerChangeNeeded) {
     if (isDealerChangeNeeded) {
@@ -293,7 +326,7 @@ function getFirstRoundResults(isDealerChangeNeeded) {
             winnerId: -1,
             scoreboard: {},
             seatIndOrder: [],
-            roundBets: {},
+            roundBets: [],
             cards: []
         };
     }
@@ -434,6 +467,9 @@ function setUpNextRound(cardsToDeal) {
     // reset bets
     bets = initBets(players, cardsToDeal);
     roundBets = [];
+    betsRevealed = false;
+    roundPointsAllocated = false;
+
     // players needs to update
     const prevDealerSeatInd = roundPlayers.find(player => player.isDealer).seatInd;
     const nextDealerSeatInd = prevDealerSeatInd + 1 === roundPlayers.length ? 0 : prevDealerSeatInd + 1;
