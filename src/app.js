@@ -1,14 +1,17 @@
-const app = require('express')();
-const https = require('https').Server(app);
-const io = require('socket.io')(http);
+const express = require('express')();
+const https = require('https');
+const io = require('socket.io')(https);
 var fs = require('fs');
+var path = require('path');
+
 const options = {
-    key: fs.readFileSync('./perm/key.pem'),
-    cert: fs.readFileSync('./perm/cert.pem')
+    key: fs.readFileSync('./key.pem', 'utf8'),
+    cert: fs.readFileSync('./cert.pem', 'utf8')
 };
-https.createServer(options, function (req, res) {
-    console.log("Let's go!");
-}).listen(4444);
+var httpsServer = https.createServer(options, express);
+
+httpsServer.listen(4444);
+
 
 let players = [];
 let roundPlayers = [];
