@@ -3,8 +3,8 @@ const https = require('https').Server(app);
 const io = require('socket.io')(http);
 var fs = require('fs');
 const options = {
-    key: fs.readFileSync('key.pem'),
-    cert: fs.readFileSync('cert.pem')
+    key: fs.readFileSync('./perm/key.pem'),
+    cert: fs.readFileSync('./perm/cert.pem')
 };
 https.createServer(options, function (req, res) {
     console.log("Let's go!");
