@@ -1,11 +1,14 @@
 const app = require('express')();
-const http = require('https').Server(app);
+const https = require('https').Server(app);
 const io = require('socket.io')(http);
 var fs = require('fs');
-
-http.listen(4444, function () {
+const options = {
+    key: fs.readFileSync('key.pem'),
+    cert: fs.readFileSync('cert.pem')
+};
+https.createServer(options, function (req, res) {
     console.log("Let's go!");
-});
+}).listen(4444);
 
 let players = [];
 let roundPlayers = [];
@@ -199,6 +202,9 @@ io.on("connection", socket => {
         socket.broadcast.emit('start next round', currentRound);
     });
 });
+
+
+
 function resetEverything() {
     roundPlayers = [];
     numOfPlayers = 0;
