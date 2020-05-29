@@ -7,7 +7,6 @@ http.listen(4444, function () {
     console.log("Let's go!");
 });
 
-const rounds = [];
 let players = [];
 let roundPlayers = [];
 var numOfPlayers = 0;
@@ -16,7 +15,6 @@ let scoreboard = [];
 
 let hitPile = [];
 let hitBase;
-let hitWinner;
 
 let isLobbyDisabled = false;
 
@@ -25,6 +23,11 @@ let bets = [];
 let currentRound = 1;
 let modifier = 0;
 let roundBets = [];
+let isLastRound = false;
+
+let roundStage = 'betting';
+let betsRevealed = false;
+let roundPointsAllocated = false;
 
 io.on("connection", socket => {
     // On landing
@@ -36,6 +39,8 @@ io.on("connection", socket => {
     // when the client emits 'add user', this listens and executes
     socket.on('add new user', (user) => {
         console.log('Trying to add new user . . .');
+        console.log(user);
+        
         if (!isLobbyDisabled) {
             ++numOfPlayers;
             addedUser = true;
@@ -96,76 +101,79 @@ io.on("connection", socket => {
     });
     socket.on('get round data', (data) => {
         const roundData = getRoundData(data);
-        socket.emit('round data', roundData);
+        socket.emit('round data', {roundData, isLastRound});
     });
     // Betting
     socket.on('making a bet', (bet) => {
-        // adding bet
-        console.log('adding bet', bet);
-        roundBets.push(bet);
-        const playerInd = roundPlayers.findIndex(player => player.uniqueId === bet.uniqueId);
-        roundPlayers[playerInd].bets = Object.assign({}, bet);
-        console.log('bet was made');
-        console.log(roundBets);
-        socket.broadcast.emit('diff player made a bet', bet);
-
-        // what if sum is wrong
-        if (dealerNeedsToChange(roundBets)) {
-            const dealerBet = getDealer().bets;
-            console.log('dealerBet', dealerBet);
-            // betting options are restricted to ones that are not the dealer's choice --> he needs to change
-            const bettingOptions = getDealer().bets.bettingOptions.filter(bet => bet !== dealerBet.bet);
-            socket.broadcast.emit('dealer change bet', bettingOptions);
-            socket.emit('dealer change bet', bettingOptions);
-            console.log('dealer instructed to bet again', getDealer());
-            console.log(bettingOptions);
-        } else if (roundBets.length === roundPlayers.length) {
-            if (currentRound === 1) {
+        if (bet.isDealerBet) {
+            const betInd = roundBets.findIndex(roundBet => bet.uniqueId === roundBet.uniqueId);
+            roundBets.splice(betInd, 1);
+            roundBets.push(bet);
+            const playerInd = roundPlayers.findIndex(player => player.uniqueId === bet.uniqueId);
+            roundPlayers[playerInd].bets = Object.assign({}, bet);
+            if (currentRound === 1 || isLastRound) {
                 const firstRoundData = getFirstRoundResults();
-                socket.broadcast.emit('play out first round', firstRoundData);
-                socket.emit('play out first round', firstRoundData);
-                roundBets = [];
+                // socket.broadcast.emit('play out first round', {firstRoundData, isDealerChangeNeeded, options});
+                io.emit('play out first round', {firstRoundData, isDealerChangeNeeded, options});
+                if (isLastRound) {
+                    resetEverything();
+                }
             } else {
-                socket.broadcast.emit('reveal bets', roundBets);
-                socket.emit('reveal bets', roundBets);
+                // socket.broadcast.emit('reveal bets', {roundBets, isDealerChangeNeeded: false, options: []});
+                betsRevealed = true;
+                io.emit('reveal bets', {roundBets, isDealerChangeNeeded: false, options: []});    
+            }
+        } else {
+            // adding bet
+            console.log('adding bet', bet);
+            roundBets.push(bet);
+            const playerInd = roundPlayers.findIndex(player => player.uniqueId === bet.uniqueId);
+            roundPlayers[playerInd].bets = Object.assign({}, bet);
+            console.log('bet was made');
+            console.log(roundBets);
+            socket.broadcast.emit('diff player made a bet', bet);
+            console.log(roundPlayers);
+            // what if sum is wrong
+            if (roundBets.length === roundPlayers.length) {
+                const isDealerChangeNeeded = dealerNeedsToChange(roundBets);
+                let options = [];
+                if (isDealerChangeNeeded) {
+                    const dealerBet = getDealer().bets;
+                    options = getDealer().bets.bettingOptions.filter(bet => bet !== dealerBet.bet);
+                }
+                if (currentRound === 1) {
+                    const firstRoundData = getFirstRoundResults(isDealerChangeNeeded);
+                    // socket.broadcast.emit('play out first round', {firstRoundData, isDealerChangeNeeded, options});
+                    io.emit('play out first round', {firstRoundData, isDealerChangeNeeded, options});
+                    roundBets = [];
+                } else {
+                    // socket.broadcast.emit('reveal bets', {roundBets, isDealerChangeNeeded, options});
+                    betsRevealed = true;
+                    io.emit('reveal bets', {roundBets, isDealerChangeNeeded, options});
+                }
             }
         }
-    });
-    socket.on('dealer changed bet', (value) => {
-        const dealerInd = roundPlayers.findIndex(player => player.isDealer);
-        roundPlayers[dealerInd].bets.bet = value;
-        if (currentRound === 1) {
-            const firstRoundData = getFirstRoundResults();
-            socket.broadcast.emit('play out first round', firstRoundData);
-            socket.emit('play out first round', firstRoundData);
-            roundBets = [];
-        } else {
-            socket.broadcast.emit('reveal bets', roundBets);
-            socket.emit('reveal bets', roundBets);
-            roundBets = [];
-        }
-        roundBets = [];
     });
     // Play cards
     socket.on('card played', (card) => {
         console.log('yeeet');
         const winnerId = playCard(card);
-        if (winnerId !== void 0) {
+        if (winnerId !== undefined) {
             console.log('hit win or round end');
-            console.log(cards.players);
             if (cards.players[0].hand.length === 0) {
                 // end of the round allocate points
                 console.log('Winner of round is being declared');
                 allocatePoints(roundPlayers);
-                socket.emit('round finished', {scoreboard, roundBets})
-                socket.broadcast.emit('round finished', {scoreboard, roundBets})
-                console.log({scoreboard, roundBets});
+                roundPointsAllocated = true;
+                io.emit('round finished', {scoreboard, roundBets, lastCard: card})
+                // socket.broadcast.emit('round finished', {scoreboard, roundBets, lastCard: card})
+                console.log({scoreboard, roundBets, lastCard: card});
             } else {
                 // meaning there is a winner for this hit
                 // tell people the winnerId and roundBets
                 console.log('Hit winner is declared');
-                socket.broadcast.emit('hit winner is', {winnerId});
-                socket.emit('hit winner is', {winnerId});
+                // socket.broadcast.emit('hit winner is', {winnerId});
+                io.emit('hit winner is', {winnerId});
                 console.log({winnerId});
             }
         } else {
@@ -184,13 +192,24 @@ io.on("connection", socket => {
             modifier -= 2;
         }
         setUpNextRound(currentRound + modifier);
+        isLastRound = modifier < 0 && currentRound + modifier === 1;
         console.log('Round setup');
         console.log(roundPlayers);
         console.log(cards);
         socket.broadcast.emit('start next round', currentRound);
     });
 });
+function resetEverything() {
+    roundPlayers = [];
+    numOfPlayers = 0;
+    host = {};
+    scoreboard = [];
+    hitPile = [];
+}
 function getNextToPlayId(prevId) {
+    if (!prevId) {
+        return -1;
+    }
     let prevSeatInd = roundPlayers.find(player => player.uniqueId === prevId).seatInd;
     let newSeatInd;
     const playerLen = roundPlayers.length;
@@ -269,9 +288,48 @@ function getRoundData(data) {
     roundData.trumpCard = cards.trump;
     // me
     roundData.me = roundPlayers.find(player => player.uniqueId === data.id);
+
+    // roundstage
+    roundData.roundStage = getRoundStage(data);
     return roundData;
 }
-function getFirstRoundResults() {
+function getRoundStage(data) {
+    const stage = getStage();
+    switch (stage) {
+        case 'betting':
+            // check if user already made a bet or nah
+            console.log(roundBets);
+            console.log(data);
+            return { stage, madeBet: roundBets.findIndex(bet => bet.uniqueId === data.id) !== -1};
+        case 'playing':
+            // send out nextId and pile
+            return { stage, nextId: getNextToPlayId(hitPile[hitPile.length - 1].uniqueId), hitPile};
+        case 'results':
+            // get the points
+            return {stage, results: { scoreboard, roundBets }};
+        default:
+            return {stage};
+    }
+}
+function getStage() {
+    if (roundPointsAllocated) {
+        return 'results';
+    } else if (betsRevealed) {
+        return 'playing';
+    } else {
+        return 'betting';
+    }
+}
+function getFirstRoundResults(isDealerChangeNeeded) {
+    if (isDealerChangeNeeded) {
+        return {
+            winnerId: -1,
+            scoreboard: {},
+            seatIndOrder: [],
+            roundBets: [],
+            cards: []
+        };
+    }
     // create order index for seats to be playing
     const seatIndOrder = getSeatIndOrder();
     console.log(seatIndOrder);
@@ -408,6 +466,10 @@ function setUpNextRound(cardsToDeal) {
     cards = Object.assign({}, dealTrumpCard(cards));
     // reset bets
     bets = initBets(players, cardsToDeal);
+    roundBets = [];
+    betsRevealed = false;
+    roundPointsAllocated = false;
+
     // players needs to update
     const prevDealerSeatInd = roundPlayers.find(player => player.isDealer).seatInd;
     const nextDealerSeatInd = prevDealerSeatInd + 1 === roundPlayers.length ? 0 : prevDealerSeatInd + 1;
@@ -434,6 +496,7 @@ function initScoreboard(users) {
     users.forEach(user => {
         out.push({
             uniqueId: user.uniqueId,
+            name: user.username,
             points: 0
         });
     })
@@ -486,7 +549,12 @@ function dealCardTo(player, cards) {
     return cards;
 }
 function dealTrumpCard(cards) {
-    const stuff = getRandomInt(0, cards.deck.length);
+    let isValidTrump = false;
+    let stuff = 0;
+    while (!isValidTrump) {
+        stuff = getRandomInt(0, cards.deck.length);
+        isValidTrump = cards.deck[stuff] !== undefined;
+    }
 
     cards.trump = cards.deck[stuff];
     cards.deck.splice(stuff, 1);
