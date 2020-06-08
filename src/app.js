@@ -1,17 +1,20 @@
-const express = require('express')();
-const https = require('https');
-const io = require('socket.io')(https);
 var fs = require('fs');
-var path = require('path');
+var https = require('https');
 
-const options = {
-    key: fs.readFileSync('./key.pem', 'utf8'),
-    cert: fs.readFileSync('./cert.pem', 'utf8')
-};
-var httpsServer = https.createServer(options, express);
+var express = require('express');
+var app = express();
 
-httpsServer.listen(4444);
+var options = {};
 
+var httpsServer = https.createServer(options, app);
+var io = require('socket.io')(https);
+// var server = require('http').createServer(app);
+// var io = require('socket.io')(server);
+
+// server.listen(config.port, config.ip, function () {
+//     console.log('Express server listening on %d, in %s mode', config.port, 
+//     app.get('env'));
+// });
 
 let players = [];
 let roundPlayers = [];
@@ -206,7 +209,11 @@ io.on("connection", socket => {
     });
 });
 
-
+httpsServer.listen(4444, function() {
+    console.log('Lets go!');
+    console.log(io);
+    
+});
 
 function resetEverything() {
     roundPlayers = [];
