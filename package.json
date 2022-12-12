@@ -19,7 +19,7 @@
   "homepage": "https://github.com/TheSoma300/socketio-rikiki-game#readme",
   "dependencies": {
     "@types/socket.io": "^2.1.4",
-    "express": "^4.17.1",
+    "express": "^4.17.3",
     "socket.io": "^2.3.0"
   }
 }
